@@ -52,7 +52,7 @@ def read_temp_mid_sn():
     devices = additional_data['offices']['office_1']['devices']
 
     sn_temp_mid = [d['serialNumber'] for d in devices if d['description'] == 'temperature_middle']
-    print("Mid serial number: ", sn_temp_mid)
+    # print("Mid serial number: ", sn_temp_mid)
     return sn_temp_mid[0]
 
 
@@ -68,10 +68,11 @@ def read_data(name):
 
 def project_check_data():
     sn_temp_mid = read_temp_mid_sn()
-    print("Mid serial number: ", sn_temp_mid)
+    # print("Mid serial number: ", sn_temp_mid)
 
     # Temperature
     df_temp = read_data('office_1_temperature_supply_points_data_2020-10-13_2020-11-02.csv')
+    df_temp.rename(columns={'value': 'temp'}, inplace=True)
 
     # Serial number for middle
     df_temp = df_temp[df_temp['serialNumber'] == sn_temp_mid]
@@ -92,39 +93,41 @@ def project_check_data():
     # Now let's resample
     df_combined = df_combined.resample(pd.Timedelta(minutes=15)).mean().fillna(method='ffill')
 
-    df_combined['temp_last'] = df_combined['value'].shift(periods=1, fill_value=20)
-    df_combined['temp_groundTruth'] = df_combined['value'].shift(periods=-1, fill_value=20.34)
+    df_combined['temp_naive'] = df_combined['temp'].shift(periods=1, fill_value=20)
+    df_combined['temp_groundTruth'] = df_combined['temp'].shift(periods=-1, fill_value=20.34)
+
+    print(df_combined.head(5))
+    print(df_combined.tail(5))
 
     mask = (df_combined.index <= '2020-10-27') | (df_combined.index > '2020-10-28')
     df_train = df_combined.loc[mask]
     #plt.figure()
     #df_train.plot()
 
-    X_train = df_train[['value', 'valve_level']].to_numpy()[1:-1]
+    X_train = df_train[['temp', 'valve_level']].to_numpy()[1:-1]
     y_train = df_train['temp_groundTruth'].to_numpy()[1:-1]
     reg_rf = RandomForestRegressor(random_state=42)
     reg_rf.fit(X_train, y_train)
 
-    # Wycinanie jednego dnia
+    # Wycinanie jednego dnia do testów
     mask = (df_combined.index > '2020-10-27') & (df_combined.index <= '2020-10-28')
     df_test = df_combined.loc[mask]
 
-    X_test = df_test[['value', 'valve_level']].to_numpy()
+    X_test = df_test[['temp', 'valve_level']].to_numpy()
     y_predicted = reg_rf.predict(X_test)
     df_test['temp_predicted'] = y_predicted.tolist()
 
     y_test = df_test['temp_groundTruth'].to_numpy()[1:-1]
-    y_last = df_test['temp_last'].to_numpy()[1:-1]
+    y_naive = df_test['temp_naive'].to_numpy()[1:-1]
 
-    print(f'mae base: {metrics.mean_absolute_error(y_test, y_last)}')
+    print(f'mae base: {metrics.mean_absolute_error(y_test, y_naive)}')
     print(f'mae forest: {metrics.mean_absolute_error(y_test, y_predicted[1:-1])}')
-    print(f'mse base: {metrics.mean_squared_error(y_test, y_last)}')
+    print(f'mse base: {metrics.mean_squared_error(y_test, y_naive)}')
     print(f'mse forest: {metrics.mean_squared_error(y_test, y_predicted[1:-1])}')
 
-    df_test.drop(columns=['value', 'valve_level', 'target_temp'], inplace=True)
+    df_test.drop(columns=['valve_level', 'target_temp', 'temp_naive', 'temp'], inplace=True)
     df_test.plot()
-    print(df_combined.head(5))
-    print(df_combined.tail(5))
+
 
     df_combined.plot()
 
