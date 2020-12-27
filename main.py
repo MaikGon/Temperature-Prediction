@@ -2,11 +2,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn import metrics
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, VotingRegressor, StackingRegressor
+from sklearn.linear_model import LinearRegression
 from sklearn import svm, tree
-import seaborn as sns
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
 import sktime
 # import fbprophet
 import pmdarima
@@ -45,13 +43,13 @@ def example_tasks():
 
 
 # Project part
-def read_temp_mid_sn():
+def read_temp(where):
     with open('dataset/additional_info.json') as f:
         additional_data = json.load(f)
 
     devices = additional_data['offices']['office_1']['devices']
 
-    sn_temp_mid = [d['serialNumber'] for d in devices if d['description'] == 'temperature_middle']
+    sn_temp_mid = [d['serialNumber'] for d in devices if d['description'] == where]
     # print("Mid serial number: ", sn_temp_mid)
     return sn_temp_mid[0]
 
@@ -67,7 +65,7 @@ def read_data(name):
 
 
 def project_check_data():
-    sn_temp_mid = read_temp_mid_sn()
+    sn_temp_mid = read_temp('temperature_middle')
     # print("Mid serial number: ", sn_temp_mid)
 
     # Temperature
@@ -93,8 +91,8 @@ def project_check_data():
     # Now let's resample
     df_combined = df_combined.resample(pd.Timedelta(minutes=15)).mean().fillna(method='ffill')
 
-    df_combined['temp_naive'] = df_combined['temp'].shift(periods=1, fill_value=20)
-    df_combined['temp_groundTruth'] = df_combined['temp'].shift(periods=-1, fill_value=20.34)
+    df_combined['temp_naive'] = df_combined['temp'].shift(periods=1, fill_value=20.1)
+    df_combined['temp_groundTruth'] = df_combined['temp'].shift(periods=-1, fill_value=20.349)
 
     print(df_combined.head(5))
     print(df_combined.tail(5))
@@ -106,7 +104,7 @@ def project_check_data():
 
     X_train = df_train[['temp', 'valve_level']].to_numpy()[1:-1]
     y_train = df_train['temp_groundTruth'].to_numpy()[1:-1]
-    reg_rf = RandomForestRegressor(random_state=42)
+    reg_rf = LinearRegression()
     reg_rf.fit(X_train, y_train)
 
     # Wycinanie jednego dnia do testów
@@ -125,18 +123,88 @@ def project_check_data():
     print(f'mse base: {metrics.mean_squared_error(y_test, y_naive)}')
     print(f'mse forest: {metrics.mean_squared_error(y_test, y_predicted[1:-1])}')
 
-    df_test.drop(columns=['valve_level', 'target_temp', 'temp_naive', 'temp'], inplace=True)
+    df_test.drop(columns=['valve_level', 'target_temp', 'temp_naive'], inplace=True)
     df_test.plot()
 
+    plt.show()
 
-    df_combined.plot()
 
-    #plt.plot(df_temp.index, df_temp.value)
-    #plt.plot(df_target.index, df_target.target_temp)
+def wall():
+    sn_temp_wall = read_temp('temperature_wall')
 
-    plt2 = plt.twinx()
+    # Temperature
+    df_temp = read_data('office_1_temperature_supply_points_data_2020-10-13_2020-11-02.csv')
+    df_temp.rename(columns={'value': 'temp'}, inplace=True)
+
+    # Serial number for middle
+    df_temp = df_temp[df_temp['serialNumber'] == sn_temp_wall]
+
+    # Target
+    df_target = read_data('office_1_targetTemperature_supply_points_data_2020-10-13_2020-11-01.csv')
+    df_target.rename(columns={'value': 'target_temp'}, inplace=True)
+
+    # Valve
+    df_valve = read_data('office_1_valveLevel_supply_points_data_2020-10-13_2020-11-01.csv')
+    df_valve.rename(columns={'value': 'valve_level'}, inplace=True)
+
+    df_combined = pd.concat([df_temp, df_target, df_valve], sort='time')
+    # Now let's resample
+    df_combined = df_combined.resample(pd.Timedelta(minutes=15)).mean().fillna(method='ffill')
+    df_combined['temp_groundTruth'] = df_combined['temp'].shift(periods=-1, fill_value=21)
+
+    # print(df_combined.head(5))
+    # print(df_combined.tail(5))
+
+    mask = (df_combined.index < '2020-10-30')  # | (df_combined.index >= '2020-10-30')
+    df_train = df_combined.loc[mask]
+
+    X_train = df_train[['temp', 'valve_level']].to_numpy()[1:-1]
+    y_train = df_train['temp_groundTruth'].to_numpy()[1:-1]
+
+    reg_rf = RandomForestRegressor(random_state=42)
+    reg_rf.fit(X_train, y_train)
+
+    reg_lin = LinearRegression()
+    reg_lin.fit(X_train, y_train)
+
+    reg_vot = VotingRegressor([('rf', reg_rf), ('lin', reg_lin)])
+    reg_vot.fit(X_train, y_train)
+
+    # Wycinanie jednego dnia do testów
+    mask_test = (df_combined.index >= '2020-10-30') & (df_combined.index < '2020-10-31')
+    df_test = df_combined.loc[mask_test]
+
+    X_test = df_test[['temp', 'valve_level']].to_numpy()
+    y_test = df_test['temp_groundTruth'].to_numpy()
+
+    y_predicted_reg_rf = reg_rf.predict(X_test)
+    # df_test['temp_predicted_forest'] = y_predicted_reg_rf.tolist()
+
+    y_predicted_reg_lin = reg_lin.predict(X_test)
+    df_test['temp_predicted_linear'] = y_predicted_reg_lin.tolist()
+
+    y_predicted_reg_vot = reg_vot.predict(X_test)
+    df_test['temp_predicted_voting'] = y_predicted_reg_vot.tolist()
+
+    print(f'mae forest: {metrics.mean_absolute_error(y_test, y_predicted_reg_rf)}')
+    print(f'mae voting: {metrics.mean_absolute_error(y_test, y_predicted_reg_vot)}')
+    print(f'mae linear: {metrics.mean_absolute_error(y_test, y_predicted_reg_lin)}')
+
+    df_test.drop(columns=['valve_level', 'target_temp'], inplace=True)
+    df_test.plot()
+
+    # df_combined.plot()
+    # plt2 = plt.twinx()
     # plt2.plot(df_valve.index, df_valve.value, color='g')
     plt.show()
+
+
+def middle():
+    pass
+
+
+def window():
+    pass
 
 
 if __name__ == "__main__":
@@ -144,4 +212,5 @@ if __name__ == "__main__":
     target = 'office_1_targetTemperature_supply_points_data_2020-10-13_2020-11-01.csv'
     valve = 'office_1_valveLevel_supply_points_data_2020-10-13_2020-11-01.csv'
 
-    project_check_data()
+    wall()
+    # project_check_data()
