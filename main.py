@@ -95,7 +95,9 @@ def wall():
     df_combined = pd.concat([df_temp, df_target, df_valve], sort='time')
     # Now let's resample
     df_combined = df_combined.resample(pd.Timedelta(minutes=15)).mean().fillna(method='ffill')
+
     df_combined['gt'] = df_combined['temp'].shift(-1, fill_value=21)
+    df_combined['gt_valve'] = df_combined['valve_level'].shift(-1, fill_value=40)
     df_combined['day'] = df_combined.index.dayofweek
     df_combined['hour'] = df_combined.index.hour
 
@@ -111,18 +113,20 @@ def wall():
     X_train = df_train[['temp', 'valve_level', 'target_temp']].to_numpy()[1:-1]
     y_train = df_train['gt'].to_numpy()[1:-1]
 
-    reg_rf = GradientBoostingRegressor(n_estimators=175)
+    reg_rf = GradientBoostingRegressor(n_estimators=80)
     reg_rf.fit(X_train, y_train)
 
     reg_random = RandomForestRegressor()
     reg_random.fit(X_train, y_train)
 
-    # reg_lin = SVR(kernel='poly', C=100)
-    reg_lin = LinearRegression()
-    reg_lin.fit(X_train, y_train)
+    X_train_valve = df_train[['temp', 'valve_level', 'target_temp']].to_numpy()[1:-1]
+    y_train_valve = df_train['gt_valve'].to_numpy()[1:-1]
 
-    reg_vot = VotingRegressor([('gr', reg_rf), ('lin', reg_lin), ('rf', reg_random)])
-    reg_vot.fit(X_train, y_train)
+    reg_rf_valve = GradientBoostingRegressor(n_estimators=80)
+    reg_rf_valve.fit(X_train_valve, y_train_valve)
+
+    reg_random_valve = RandomForestRegressor(n_estimators=80)
+    reg_random_valve.fit(X_train_valve, y_train_valve)
 
     # Wycinanie jednego dnia do testów
     mask_test = (df_combined.index >= '2020-10-26') & (df_combined.index < '2020-10-27')
@@ -132,25 +136,30 @@ def wall():
     y_test = df_test['gt'].to_numpy()
 
     y_predicted_reg_rf = reg_rf.predict(X_test)
-    df_test['temp_predicted_gradient'] = y_predicted_reg_rf.tolist()
+    #df_test['temp_predicted_gradient'] = y_predicted_reg_rf.tolist()
 
     y_predicted_reg_forest = reg_random.predict(X_test)
     #df_test['temp_predicted_forest'] = y_predicted_reg_forest.tolist()
 
-    y_predicted_reg_lin = reg_lin.predict(X_test)
-    #df_test['temp_predicted_lin'] = y_predicted_reg_lin.tolist()
+    print(f'mae gradient: {metrics.mean_squared_error(y_test, y_predicted_reg_rf)}')
+    print(f'mae forest: {metrics.mean_squared_error(y_test, y_predicted_reg_forest)}')
 
-    y_predicted_reg_vot = reg_vot.predict(X_test)
-    df_test['temp_predicted_voting'] = y_predicted_reg_vot.tolist()
+    X_test_valve = df_test[['temp', 'valve_level', 'target_temp']].to_numpy()
+    y_test_valve = df_test['gt_valve'].to_numpy()
 
-    print(f'mae gradient: {metrics.mean_absolute_error(y_test, y_predicted_reg_rf)}')
-    print(f'mae forest: {metrics.mean_absolute_error(y_test, y_predicted_reg_forest)}')
-    print(f'mae voting: {metrics.mean_absolute_error(y_test, y_predicted_reg_vot)}')
-    print(f'mae linear: {metrics.mean_absolute_error(y_test, y_predicted_reg_lin)}')
+    y_predicted_reg_rf_valve = reg_rf_valve.predict(X_test_valve)
+    df_test['temp_predicted_gradient_valve'] = y_predicted_reg_rf_valve.tolist()
 
-    pickle.dump(reg_rf, open('./clf.p', 'wb'))
+    y_predicted_reg_forest_valve = reg_random_valve.predict(X_test_valve)
+    df_test['temp_predicted_forest_valve'] = y_predicted_reg_forest_valve.tolist()
 
-    df_test.drop(columns=['valve_level', 'target_temp', 'day', 'hour'], inplace=True)
+    print(f'mae gradient: {metrics.mean_squared_error(y_test_valve, y_predicted_reg_rf_valve)}')
+    print(f'mae forest: {metrics.mean_squared_error(y_test_valve, y_predicted_reg_forest_valve)}')
+
+    # pickle.dump(reg_rf, open('./clf.p', 'wb')) regressor
+    pickle.dump(reg_rf_valve, open('./valve.p', 'wb'))
+
+    df_test.drop(columns=['temp', 'gt', 'target_temp', 'day', 'hour'], inplace=True)
     df_test.plot()
 
     # df_combined.plot()
