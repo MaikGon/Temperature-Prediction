@@ -2,13 +2,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn import metrics
-from sklearn.ensemble import RandomForestRegressor, VotingRegressor, GradientBoostingRegressor
-from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import GridSearchCV
 from sklearn.svm import SVR
-import sktime
+
 # import fbprophet
 import pmdarima
 import statsmodels.tsa
@@ -70,6 +68,8 @@ def read_data(name):
 
 def wall():
     sn_temp_wall = read_temp('temperature_wall')
+    sn_temp_middle = read_temp('temperature_middle')
+    sn_temp_window = read_temp('temperature_window')
 
     # Temperature
     df_temp_1 = read_data('office_1_temperature_supply_points_data_2020-03-05_2020-03-19.csv')
@@ -77,8 +77,13 @@ def wall():
     df_temp = pd.concat([df_temp_1, df_temp_2])
     df_temp.rename(columns={'value': 'temp'}, inplace=True)
 
-    # Serial number for middle
-    df_temp = df_temp[df_temp['serialNumber'] == sn_temp_wall]
+    # Serial number
+    df_temp_1 = df_temp[df_temp['serialNumber'] == sn_temp_wall]
+    df_temp_1.rename(columns={'temp': 'temp_wall'}, inplace=True)
+    df_temp_2 = df_temp[df_temp['serialNumber'] == sn_temp_middle]
+    df_temp_2.rename(columns={'temp': 'temp_middle'}, inplace=True)
+    df_temp_3 = df_temp[df_temp['serialNumber'] == sn_temp_window]
+    df_temp_3.rename(columns={'temp': 'temp_window'}, inplace=True)
 
     # Target
     df_target_1 = read_data('office_1_targetTemperature_supply_points_data_2020-03-05_2020-03-19.csv')
@@ -92,11 +97,11 @@ def wall():
     df_valve = pd.concat([df_valve_1, df_valve_2])
     df_valve.rename(columns={'value': 'valve_level'}, inplace=True)
 
-    df_combined = pd.concat([df_temp, df_target, df_valve], sort='time')
+    df_combined = pd.concat([df_temp_1, df_temp_2, df_temp_3, df_target, df_valve], sort='time')
     # Now let's resample
     df_combined = df_combined.resample(pd.Timedelta(minutes=15)).mean().fillna(method='ffill')
 
-    df_combined['gt'] = df_combined['temp'].shift(-1, fill_value=21)
+    df_combined['gt'] = df_combined['temp_middle'].shift(-1, fill_value=21)
     df_combined['gt_valve'] = df_combined['valve_level'].shift(-1, fill_value=40)
     df_combined['day'] = df_combined.index.dayofweek
     df_combined['hour'] = df_combined.index.hour
@@ -110,56 +115,50 @@ def wall():
     mask = (df_combined.index < '2020-10-26')
     df_train = df_combined.loc[mask]
 
-    X_train = df_train[['temp', 'valve_level', 'target_temp']].to_numpy()[1:-1]
+    X_train = df_train[['temp_window', 'temp_middle', 'valve_level', 'target_temp']].to_numpy()[1:-1]
     y_train = df_train['gt'].to_numpy()[1:-1]
 
     reg_rf = GradientBoostingRegressor(n_estimators=80)
     reg_rf.fit(X_train, y_train)
 
-    reg_random = RandomForestRegressor()
-    reg_random.fit(X_train, y_train)
-
-    X_train_valve = df_train[['temp', 'valve_level', 'target_temp']].to_numpy()[1:-1]
+    X_train_valve = df_train[['temp_wall', 'temp_window', 'temp_middle', 'valve_level', 'target_temp']].to_numpy()[1:-1]
     y_train_valve = df_train['gt_valve'].to_numpy()[1:-1]
 
+    base_es = GradientBoostingRegressor()
+    param_grid = [
+        {'n_estimators': [50, 80, 100, 120, 130, 140, 170, 200, 220, 250, 300]}
+    ]
+
+    #grid_s = GridSearchCV(base_es, param_grid).fit(X_train_valve, y_train_valve)
+    #print(grid_s.best_params_)
     reg_rf_valve = GradientBoostingRegressor(n_estimators=80)
     reg_rf_valve.fit(X_train_valve, y_train_valve)
-
-    reg_random_valve = RandomForestRegressor(n_estimators=80)
-    reg_random_valve.fit(X_train_valve, y_train_valve)
 
     # Wycinanie jednego dnia do testów
     mask_test = (df_combined.index >= '2020-10-26') & (df_combined.index < '2020-10-27')
     df_test = df_combined.loc[mask_test]
 
-    X_test = df_test[['temp', 'valve_level', 'target_temp']].to_numpy()
+    X_test = df_test[['temp_window', 'temp_middle', 'valve_level', 'target_temp']].to_numpy()
     y_test = df_test['gt'].to_numpy()
 
     y_predicted_reg_rf = reg_rf.predict(X_test)
     #df_test['temp_predicted_gradient'] = y_predicted_reg_rf.tolist()
 
-    y_predicted_reg_forest = reg_random.predict(X_test)
-    #df_test['temp_predicted_forest'] = y_predicted_reg_forest.tolist()
+    print(f'mae temperature: {metrics.mean_absolute_error(y_test, y_predicted_reg_rf)}')
 
-    print(f'mae gradient: {metrics.mean_squared_error(y_test, y_predicted_reg_rf)}')
-    print(f'mae forest: {metrics.mean_squared_error(y_test, y_predicted_reg_forest)}')
-
-    X_test_valve = df_test[['temp', 'valve_level', 'target_temp']].to_numpy()
+    X_test_valve = df_test[['temp_wall', 'temp_window', 'temp_middle', 'valve_level', 'target_temp']].to_numpy()
     y_test_valve = df_test['gt_valve'].to_numpy()
 
     y_predicted_reg_rf_valve = reg_rf_valve.predict(X_test_valve)
     df_test['temp_predicted_gradient_valve'] = y_predicted_reg_rf_valve.tolist()
 
-    y_predicted_reg_forest_valve = reg_random_valve.predict(X_test_valve)
-    df_test['temp_predicted_forest_valve'] = y_predicted_reg_forest_valve.tolist()
+    print(f'mae valve: {metrics.mean_absolute_error(y_test_valve, y_predicted_reg_rf_valve)}')
 
-    print(f'mae gradient: {metrics.mean_squared_error(y_test_valve, y_predicted_reg_rf_valve)}')
-    print(f'mae forest: {metrics.mean_squared_error(y_test_valve, y_predicted_reg_forest_valve)}')
 
-    # pickle.dump(reg_rf, open('./clf.p', 'wb')) regressor
-    pickle.dump(reg_rf_valve, open('./valve.p', 'wb'))
+    pickle.dump(reg_rf, open('./clf1.p', 'wb')) #regressor
+    pickle.dump(reg_rf_valve, open('./valve1.p', 'wb'))
 
-    df_test.drop(columns=['temp', 'gt', 'target_temp', 'day', 'hour'], inplace=True)
+    df_test.drop(columns=['temp_wall', 'temp_middle', 'temp_window',  'gt', 'target_temp', 'day', 'hour'], inplace=True)
     df_test.plot()
 
     # df_combined.plot()
