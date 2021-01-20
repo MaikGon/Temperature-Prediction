@@ -4,9 +4,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from sklearn import metrics
-import matplotlib.pyplot as plt
-
 from processing.utils import perform_processing
 
 
@@ -26,12 +23,11 @@ def main():
     stop = pd.Timestamp(arguments['stop']).tz_localize('UTC')
 
     df_temperature = pd.read_csv(arguments['file_temperature'], index_col=0, parse_dates=True)
-    df_temperature_cop = df_temperature[df_temperature['serialNumber'] == arguments['serial_number']]
     df_target_temperature = pd.read_csv(arguments['file_target_temperature'], index_col=0, parse_dates=True)
     df_valve = pd.read_csv(arguments['file_valve_level'], index_col=0, parse_dates=True)
 
     df_combined = pd.concat([
-        df_temperature_cop.rename(columns={'value': 'temperature'}),
+        df_temperature[df_temperature['serialNumber'] == arguments['serial_number']].rename(columns={'value': 'temperature'}),
         df_target_temperature.rename(columns={'value': 'target_temperature'}),
         df_valve.rename(columns={'value': 'valve_level'})
     ])
@@ -55,14 +51,7 @@ def main():
         df_combined_resampled.at[current, 'predicted_temperature'] = predicted_temperature
         df_combined_resampled.at[current, 'predicted_valve_level'] = predicted_valve_level
 
-    print(metrics.mean_absolute_error(df_combined_resampled['temperature'], df_combined_resampled['predicted_temperature']))
-    print(metrics.mean_absolute_error(df_combined_resampled['valve_level'], df_combined_resampled['predicted_valve_level']))
-
     df_combined_resampled.to_csv(results_file)
-
-    df_combined_resampled.drop(columns=['predicted_valve_level', 'target_temperature', 'valve_level']).plot()
-    df_combined_resampled.drop(columns=['temperature', 'target_temperature', 'predicted_temperature']).plot()
-    plt.show()
 
 
 if __name__ == '__main__':

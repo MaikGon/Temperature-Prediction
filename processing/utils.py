@@ -2,20 +2,9 @@ import pandas as pd
 import argparse
 import json
 from pathlib import Path
-import matplotlib.pyplot as plt
 from typing import Tuple
-
-import numpy as np
 from sklearn import metrics
-from sklearn.ensemble import RandomForestRegressor, VotingRegressor, GradientBoostingRegressor
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.linear_model import LinearRegression
-from sklearn.svm import SVR
-import sktime
-# import fbprophet
-import pmdarima
-import statsmodels.tsa
-import pyts
+from sklearn.ensemble import GradientBoostingRegressor
 import random
 import pickle
 random.seed(42)
@@ -26,9 +15,8 @@ def read_temp(where):
         additional_data = json.load(f)
 
     devices = additional_data['offices']['office_1']['devices']
-
     sn_temp_mid = [d['serialNumber'] for d in devices if d['description'] == where]
-    # print("Mid serial number: ", sn_temp_mid)
+
     return sn_temp_mid[0]
 
 
@@ -57,10 +45,10 @@ def perform_processing(temperature: pd.DataFrame, target_temperature: pd.DataFra
     df_temp_3.rename(columns={'value': 'temp_window'}, inplace=True)
     df_temp_3.drop(columns=['unit'], inplace=True)
 
-    with Path('clf1.p').open('rb') as reg_file:
+    with Path('./model/temp_model.p').open('rb') as reg_file:
         reg = pickle.load(reg_file)
 
-    with Path('valve1.p').open('rb') as valve_file:
+    with Path('./model/valve_model.p').open('rb') as valve_file:
         valve_reg = pickle.load(valve_file)
 
     df_target = target_temperature
@@ -85,26 +73,23 @@ def perform_processing(temperature: pd.DataFrame, target_temperature: pd.DataFra
     hour_mask = (df_combined['hour'] >= 4) & (df_combined['hour'] <= 16)
     df_combined = df_combined.loc[hour_mask]
 
-    mask = (df_combined.index > '2020-10-25')
-    df_train = df_combined.loc[mask]
+    X_train = df_combined[['temp_window', 'temp_middle', 'valve_level', 'target_temp']].to_numpy()[1:-1]
+    y_train = df_combined['gt'].to_numpy()[1:-1]
 
-    X_train = df_train[['temp_window', 'temp_middle', 'valve_level', 'target_temp']].to_numpy()[1:-1]
-    y_train = df_train['gt'].to_numpy()[1:-1]
-
-    X_test = df_train[['temp_window', 'temp_middle', 'valve_level', 'target_temp']].to_numpy()[-2:]
+    X_test = df_combined[['temp_window', 'temp_middle', 'valve_level', 'target_temp']].to_numpy()[-2:]
 
     # temperature refit
     reg.set_params(n_estimators=200, warm_start=True)
     reg.fit(X_train, y_train)
     y_predicted_reg = reg.predict(X_test)
 
-    X_train_valve = df_train[['temp_wall', 'temp_window', 'temp_middle', 'valve_level', 'target_temp']].to_numpy()[1:-1]
-    y_train_valve = df_train['gt_valve'].to_numpy()[1:-1]
+    X_train_valve = df_combined[['temp_wall', 'temp_window', 'temp_middle', 'valve_level', 'target_temp']].to_numpy()[1:-1]
+    y_train_valve = df_combined['gt_valve'].to_numpy()[1:-1]
 
-    X_test_valve = df_train[['temp_wall', 'temp_window', 'temp_middle', 'valve_level', 'target_temp']].to_numpy()[-2:]
+    X_test_valve = df_combined[['temp_wall', 'temp_window', 'temp_middle', 'valve_level', 'target_temp']].to_numpy()[-2:]
 
     # valve refit
-    valve_reg.set_params(n_estimators=200, warm_start=True)
+    valve_reg.set_params(n_estimators=80, warm_start=True)
     valve_reg.fit(X_train_valve, y_train_valve)
     y_predicted_valve = valve_reg.predict(X_test_valve)
 
